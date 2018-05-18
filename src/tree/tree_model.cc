@@ -5,6 +5,8 @@
  */
 #include <xgboost/tree_model.h>
 #include <sstream>
+#include <limits>
+#include <iomanip>
 #include "./param.h"
 
 namespace xgboost {
@@ -15,69 +17,150 @@ namespace tree {
 DMLC_REGISTER_PARAMETER(TrainParam);
 }
 // internal function to dump regression tree to text
-void DumpRegTree2Text(std::stringstream& fo,  // NOLINT(*)
-                      const RegTree& tree,
-                      const FeatureMap& fmap,
-                      int nid, int depth, bool with_stats) {
-  for (int i = 0;  i < depth; ++i) {
-    fo << '\t';
-  }
-  if (tree[nid].is_leaf()) {
-    fo << nid << ":leaf=" << tree[nid].leaf_value();
-    if (with_stats) {
-      fo << ",cover=" << tree.stat(nid).sum_hess;
+void DumpRegTree(std::stringstream& fo,  // NOLINT(*)
+                 const RegTree& tree,
+                 const FeatureMap& fmap,
+                 int nid, int depth, int add_comma,
+                 bool with_stats, std::string format) {
+  int float_max_precision = std::numeric_limits<bst_float>::max_digits10;
+  if (format == "json") {
+    if (add_comma) {
+      fo << ",";
     }
-    fo << '\n';
+    if (depth != 0) {
+      fo << std::endl;
+    }
+    for (int i = 0; i < depth + 1; ++i) {
+      fo << "  ";
+    }
+  } else {
+    for (int i = 0; i < depth; ++i) {
+      fo << '\t';
+    }
+  }
+  if (tree[nid].IsLeaf()) {
+    if (format == "json") {
+      fo << "{ \"nodeid\": " << nid
+         << ", \"leaf\": " << std::setprecision(float_max_precision) << tree[nid].LeafValue();
+      if (with_stats) {
+        fo << ", \"cover\": " << std::setprecision(float_max_precision) << tree.Stat(nid).sum_hess;
+      }
+      fo << " }";
+    } else {
+      fo << nid << ":leaf=" << std::setprecision(float_max_precision) << tree[nid].LeafValue();
+      if (with_stats) {
+        fo << ",cover=" << std::setprecision(float_max_precision) << tree.Stat(nid).sum_hess;
+      }
+      fo << '\n';
+    }
   } else {
     // right then left,
-    bst_float cond = tree[nid].split_cond();
-    const unsigned split_index = tree[nid].split_index();
-    if (split_index < fmap.size()) {
+    bst_float cond = tree[nid].SplitCond();
+    const unsigned split_index = tree[nid].SplitIndex();
+    if (split_index < fmap.Size()) {
       switch (fmap.type(split_index)) {
         case FeatureMap::kIndicator: {
-          int nyes = tree[nid].default_left() ?
-              tree[nid].cright() : tree[nid].cleft();
-          fo << nid << ":[" << fmap.name(split_index) << "] yes=" << nyes
-             << ",no=" << tree[nid].cdefault();
+          int nyes = tree[nid].DefaultLeft() ?
+              tree[nid].RightChild() : tree[nid].LeftChild();
+          if (format == "json") {
+            fo << "{ \"nodeid\": " << nid
+               << ", \"depth\": " << depth
+               << ", \"split\": \"" << fmap.Name(split_index) << "\""
+               << ", \"yes\": " << nyes
+               << ", \"no\": " << tree[nid].DefaultChild();
+          } else {
+            fo << nid << ":[" << fmap.Name(split_index) << "] yes=" << nyes
+               << ",no=" << tree[nid].DefaultChild();
+          }
           break;
         }
         case FeatureMap::kInteger: {
-          fo << nid << ":[" << fmap.name(split_index) << "<"
-             << int(float(cond)+1.0f)
-             << "] yes=" << tree[nid].cleft()
-             << ",no=" << tree[nid].cright()
-             << ",missing=" << tree[nid].cdefault();
+          if (format == "json") {
+            fo << "{ \"nodeid\": " << nid
+               << ", \"depth\": " << depth
+               << ", \"split\": \"" << fmap.Name(split_index) << "\""
+               << ", \"split_condition\": " << int(cond + 1.0)
+               << ", \"yes\": " << tree[nid].LeftChild()
+               << ", \"no\": " << tree[nid].RightChild()
+               << ", \"missing\": " << tree[nid].DefaultChild();
+          } else {
+            fo << nid << ":[" << fmap.Name(split_index) << "<"
+               << int(cond + 1.0)
+               << "] yes=" << tree[nid].LeftChild()
+               << ",no=" << tree[nid].RightChild()
+               << ",missing=" << tree[nid].DefaultChild();
+          }
           break;
         }
         case FeatureMap::kFloat:
         case FeatureMap::kQuantitive: {
-          fo << nid << ":[" << fmap.name(split_index) << "<"<< float(cond)
-             << "] yes=" << tree[nid].cleft()
-             << ",no=" << tree[nid].cright()
-             << ",missing=" << tree[nid].cdefault();
-            break;
+          if (format == "json") {
+            fo << "{ \"nodeid\": " << nid
+               << ", \"depth\": " << depth
+               << ", \"split\": \"" << fmap.Name(split_index) << "\""
+               << ", \"split_condition\": " << std::setprecision(float_max_precision) << cond
+               << ", \"yes\": " << tree[nid].LeftChild()
+               << ", \"no\": " << tree[nid].RightChild()
+               << ", \"missing\": " << tree[nid].DefaultChild();
+          } else {
+            fo << nid << ":[" << fmap.Name(split_index)
+               << "<" << std::setprecision(float_max_precision) << cond
+               << "] yes=" << tree[nid].LeftChild()
+               << ",no=" << tree[nid].RightChild()
+               << ",missing=" << tree[nid].DefaultChild();
+          }
+          break;
         }
         default: LOG(FATAL) << "unknown fmap type";
         }
     } else {
-      fo << nid << ":[f" << split_index << "<"<< float(cond)
-         << "] yes=" << tree[nid].cleft()
-         << ",no=" << tree[nid].cright()
-         << ",missing=" << tree[nid].cdefault();
+      if (format == "json") {
+        fo << "{ \"nodeid\": " << nid
+           << ", \"depth\": " << depth
+           << ", \"split\": " << split_index
+           << ", \"split_condition\": " << std::setprecision(float_max_precision) << cond
+           << ", \"yes\": " << tree[nid].LeftChild()
+           << ", \"no\": " << tree[nid].RightChild()
+           << ", \"missing\": " << tree[nid].DefaultChild();
+      } else {
+        fo << nid << ":[f" << split_index << "<"<< std::setprecision(float_max_precision) << cond
+           << "] yes=" << tree[nid].LeftChild()
+           << ",no=" << tree[nid].RightChild()
+           << ",missing=" << tree[nid].DefaultChild();
+      }
     }
     if (with_stats) {
-      fo << ",gain=" << tree.stat(nid).loss_chg << ",cover=" << tree.stat(nid).sum_hess;
+      if (format == "json") {
+        fo << ", \"gain\": " << std::setprecision(float_max_precision) << tree.Stat(nid).loss_chg
+           << ", \"cover\": " << std::setprecision(float_max_precision) << tree.Stat(nid).sum_hess;
+      } else {
+        fo << ",gain=" << std::setprecision(float_max_precision) << tree.Stat(nid).loss_chg
+           << ",cover=" << std::setprecision(float_max_precision) << tree.Stat(nid).sum_hess;
+      }
     }
-    fo << '\n';
-    DumpRegTree2Text(fo, tree, fmap, tree[nid].cleft(), depth + 1, with_stats);
-    DumpRegTree2Text(fo, tree, fmap, tree[nid].cright(), depth + 1, with_stats);
+    if (format == "json") {
+      fo << ", \"children\": [";
+    } else {
+      fo << '\n';
+    }
+    DumpRegTree(fo, tree, fmap, tree[nid].LeftChild(), depth + 1, false, with_stats, format);
+    DumpRegTree(fo, tree, fmap, tree[nid].RightChild(), depth + 1, true, with_stats, format);
+    if (format == "json") {
+      fo << std::endl;
+      for (int i = 0; i < depth + 1; ++i) {
+        fo << "  ";
+      }
+      fo << "]}";
+    }
   }
 }
 
-std::string RegTree::Dump2Text(const FeatureMap& fmap, bool with_stats) const {
+std::string RegTree::DumpModel(const FeatureMap& fmap,
+                               bool with_stats,
+                               std::string format) const {
   std::stringstream fo("");
   for (int i = 0; i < param.num_roots; ++i) {
-    DumpRegTree2Text(fo, *this, fmap, i, 0, with_stats);
+    DumpRegTree(fo, *this, fmap, i, 0, false, with_stats, format);
   }
   return fo.str();
 }

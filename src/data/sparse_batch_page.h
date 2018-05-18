@@ -17,6 +17,7 @@
 #include <string>
 #include <utility>
 #include <memory>
+#include <functional>
 
 #if DMLC_ENABLE_STD_THREAD
 #include <dmlc/concurrency.h>
@@ -50,11 +51,11 @@ class SparsePage {
     return offset.size() - 1;
   }
   /*! \return estimation of memory cost of this page */
-  inline size_t MemCostBytes(void) const {
+  inline size_t MemCostBytes() const {
     return offset.size() * sizeof(size_t) + data.size() * sizeof(SparseBatch::Entry);
   }
   /*! \brief clear the page */
-  inline void Clear(void) {
+  inline void Clear() {
     min_index = 0;
     offset.clear();
     offset.push_back(0);
@@ -91,7 +92,7 @@ class SparsePage {
     for (size_t i = batch.offset[0]; i < batch.offset[batch.size]; ++i) {
       uint32_t index = batch.index[i];
       bst_float fvalue = batch.value == nullptr ? 1.0f : batch.value[i];
-      data.push_back(SparseBatch::Entry(index, fvalue));
+      data.emplace_back(index, fvalue);
     }
     CHECK_EQ(offset.back(), data.size());
   }
@@ -144,7 +145,7 @@ class SparsePage {
 class SparsePage::Format {
  public:
   /*! \brief virtual destructor */
-  virtual ~Format() {}
+  virtual ~Format() = default;
   /*!
    * \brief Load all the segments into page, advance fi to end of the block.
    * \param page The data to read page into.
@@ -201,16 +202,16 @@ class SparsePage::Writer {
    * \brief Push a write job to the writer.
    * This function won't block,
    * writing is done by another thread inside writer.
-   * \param page The page to be wriiten
+   * \param page The page to be written
    */
-  void PushWrite(std::unique_ptr<SparsePage>&& page);
+  void PushWrite(std::shared_ptr<SparsePage>&& page);
   /*!
    * \brief Allocate a page to store results.
    *  This function can block when the writer is too slow and buffer pages
    *  have not yet been recycled.
    * \param out_page Used to store the allocated pages.
    */
-  void Alloc(std::unique_ptr<SparsePage>* out_page);
+  void Alloc(std::shared_ptr<SparsePage>* out_page);
 
  private:
   /*! \brief number of allocated pages */
@@ -220,9 +221,9 @@ class SparsePage::Writer {
   /*! \brief writer threads */
   std::vector<std::unique_ptr<std::thread> > workers_;
   /*! \brief recycler queue */
-  dmlc::ConcurrentBlockingQueue<std::unique_ptr<SparsePage> > qrecycle_;
+  dmlc::ConcurrentBlockingQueue<std::shared_ptr<SparsePage> > qrecycle_;
   /*! \brief worker threads */
-  std::vector<dmlc::ConcurrentBlockingQueue<std::unique_ptr<SparsePage> > > qworkers_;
+  std::vector<dmlc::ConcurrentBlockingQueue<std::shared_ptr<SparsePage> > > qworkers_;
 };
 #endif  // DMLC_ENABLE_STD_THREAD
 
